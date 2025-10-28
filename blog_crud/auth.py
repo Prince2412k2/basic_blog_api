@@ -7,10 +7,10 @@ import jwt
 from jwt.exceptions import InvalidTokenError
 from typing import Annotated
 
-from pydantic_core.core_schema import int_schema
 
-from service import UserService
-from db import db
+
+from blog_crud.service import UserService
+from blog_crud.db import db
 import logging 
 
 logger=logging.getLogger(__name__)

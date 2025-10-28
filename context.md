@@ -1,7 +1,15 @@
 
 
+ **hidden : .git** 
+
+ **hidden : .gitignore** 
+
+ **hidden : .pytest_cache** 
+
+
+
 --- 
- ## **path**: /service.py 
+ ## **path**: blog_crud/service.py 
  ```from asyncpg.pool import Pool
 from passlib.context import CryptContext
 from typing import Optional, Union
@@ -28,6 +36,7 @@ class CreateTables:
                     password text
                 );            
                 ''')
+        logger.info("Created USERS table")
         
     @staticmethod
     async def blog_table(db:Pool):
@@ -40,6 +49,7 @@ class CreateTables:
                     likes bigint DEFAULT 0
                 );         
                 ''')
+        logger.info("Created BLOGs table")
     @staticmethod
     async def comment_table(db:Pool):
         await db.execute(''' 
@@ -50,6 +60,7 @@ class CreateTables:
                     user_id BIGINT REFERENCES users(id) ON DELETE CASCADE
                 );            
                 ''')
+        logger.info("Created COMMENTS table")
 
 class PasswordService:
     @staticmethod
@@ -70,6 +81,7 @@ class UserService:
             Values($1,$2)
             RETURNING id;''',name,hashed
         )
+        logger.info(f"Created user with name={name}")
         return row["id"]
     
     @staticmethod
@@ -81,7 +93,13 @@ class UserService:
             WHERE id=$3
         ;''',name,hashed,user_id
         )
-        return result == "UPDATE 1"
+        if result != "UPDATE 1":
+            logger.info(f"User(id={user_id})Failed to Update")
+            return False
+        
+        logger.info(f"User(id={user_id}) Updated successfully")
+        return True
+        
     
     @staticmethod
     async def delete(user_id:int,db:Pool):
@@ -89,7 +107,14 @@ class UserService:
             DELETE FROM users
             WHERE id=$1;
             ''',user_id)
-        return result == "DELETE 1"
+        
+        if result != "DELETE 1":
+            logger.info(f"User(id={user_id})Failed to delete")
+            return False
+        
+        logger.info(f"User(id={user_id}) deleted successfully")
+        return True
+        
     
     @staticmethod
     async def read(user_id:int,db:Pool):
@@ -130,6 +155,7 @@ class BlogService:
             Values($1,$2,$3)
             RETURNING id;''',title,content,user_id
         )
+        logger.info(f"Created blog with {title=}")
         return row["id"]
     
     @staticmethod
@@ -141,7 +167,13 @@ class BlogService:
             ''',
             title,content,blog_id
         )
-        return result=="UPDATE 1"
+        if result != "UPDATE 1":
+            logger.info(f"Blog(id={blog_id})Failed to Update")
+            return False
+        
+        logger.info(f"Blog(id={blog_id}) Updated successfully")
+        return True
+        
     
     @staticmethod
     async def delete(blog_id:int,db:Pool):
@@ -149,7 +181,12 @@ class BlogService:
             DELETE FROM blogs
             WHERE id=$1;
             ''',blog_id)
-        return result == "DELETE 1"
+        if result != "DELETE 1":
+            logger.info(f"Blog(id={blog_id})Failed to Delete")
+            return False
+        
+        logger.info(f"Blog(id={blog_id}) Deleted successfully")
+        return True
     
     @staticmethod
     async def read(blog_id:int,db:Pool):
@@ -166,6 +203,7 @@ class BlogService:
             ''')
         parsed=[dict(i) for i in result]
         return parsed
+    
     @staticmethod
     async def read_all_for_user(user_id:int,db:Pool):
         result=await db.fetch('''
@@ -195,7 +233,12 @@ class CommentService:
             ''',
             content,comment_id
         )
-        return result=="UPDATE 1"
+        if result != "UPDATE 1":
+            logger.info(f"Comment(id={comment_id})Failed to Update")
+            return False
+        
+        logger.info(f"Comment(id={comment_id}) Updated successfully")
+        return True
     
     @staticmethod
     async def delete(comment_id:int,db:Pool):
@@ -203,8 +246,13 @@ class CommentService:
             DELETE FROM comments
             WHERE id=$1;
             ''',comment_id)
-        return result == "DELETE 1"
-    
+        if result != "DELETE 1":
+            logger.info(f"Comment(id={comment_id})Failed to Delete")
+            return False
+        
+        logger.info(f"Comment(id={comment_id}) Deleted successfully")
+        return True
+        
     @staticmethod
     async def read(comment_id:int,db:Pool):
         result=await db.fetchrow('''
@@ -235,7 +283,7 @@ class CommentService:
  ```
 
 --- 
- ## **path**: /db.py 
+ ## **path**: blog_crud/db.py 
  ```import asyncpg 
 from typing import Optional
 from dotenv import load_dotenv
@@ -255,28 +303,38 @@ class Database:
     async def disconnect(self):
         if self.pool:
             await self.pool.close()
-            
-db=Database() 
+db=Database()            
+def get_db()->asyncpg.pool.Pool:
+    if not db.pool:
+        raise ValueError("DB is not connected")
+    return db.pool
+ 
 
  ```
 
 --- 
- ## **path**: /main.py 
- ```from fastapi import FastAPI,Depends,HTTPException,status
+ ## **path**: blog_crud/__init__.py 
+ ``` 
+
+ ```
+
+--- 
+ ## **path**: blog_crud/main.py 
+ ```from fastapi import FastAPI,Depends,HTTPException,status,Response
 from fastapi.security import OAuth2PasswordRequestForm
 from contextlib import asynccontextmanager
 
 
 
-from db import db
-from service import (
+from blog_crud.db import db,get_db
+from blog_crud.service import (
     CreateTables,
     UserService,
     BlogService,
     CommentService
     )
-from schema import BlogRequest, CommentRequest, Comments, User,CustomResponse,Token,Blogs,Blog,Comment
-from auth import create_access_token,get_current_user
+from blog_crud.schema import BlogRequest, CommentRequest, Comments, User,Token,Blogs,Blog
+from blog_crud.auth import create_access_token,get_current_user
 from typing import Annotated
 import logging 
 
@@ -289,7 +347,7 @@ logger=logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app:FastAPI):
     await db.connect()
-    await CreateTables.run(db.pool)
+    await CreateTables.run(get_db())
     yield
     await db.disconnect()
     
@@ -297,18 +355,18 @@ app=FastAPI(lifespan=lifespan)
 
 @app.post("/signup")
 async def signup(user:User):
-    if await UserService.exists(user.name,db.pool):
-        return CustomResponse(status=403,payload=f"User with name={user.name} already exists")
+    if await UserService.exists(user.name,get_db()):
+        return Response(status_code=403,content=f"User with name={user.name} already exists")
     try:
-        await UserService.create(user.name,user.password,db.pool)
-        return CustomResponse(status=200,payload="User created!!")
+        await UserService.create(user.name,user.password,get_db())
+        return Response(status_code=200,content="User created!!")
     except Exception as e:
-        return CustomResponse(status=400,payload=str(e))
+        return Response(status_code=400,content=str(e))
     
 
 @app.post("/login")
 async def login(form_data:Annotated[OAuth2PasswordRequestForm,Depends()])->Token:
-    user=await UserService.validate( form_data.username, form_data.password,db.pool)
+    user=await UserService.validate( form_data.username, form_data.password,get_db())
     if not user:
             raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -320,88 +378,84 @@ async def login(form_data:Annotated[OAuth2PasswordRequestForm,Depends()])->Token
         )
     return Token(access_token=access_token,token_type="bearer")
     
-@app.get("/blogs")
+@app.get("/blogs",status_code=200)
 async def blogs(current_user: Annotated[User, Depends(get_current_user)]):
     try:
-        blogs=await BlogService.read_all(db.pool)
+        blogs=await BlogService.read_all(get_db())
         return Blogs(blogs=blogs)
-    except Exception:
-        raise
+    except Exception as e:
+        return Response(status_code=400,content=f"Something went wrong error:{e}")
 
 @app.get("/blog/{blog_id}")
 async def get_blog(blog_id:int,current_user: Annotated[User, Depends(get_current_user)]):
     try:
-        blog=await BlogService.read(blog_id,db.pool)
+        blog=await BlogService.read(blog_id,get_db())
         if not blog:
             raise ValueError("No blog for given blog_id")
         return Blog(**blog)
     except Exception as e:
-        return CustomResponse(status=400,payload=str(e))
+        return Response(status_code=400,content=str(e))
     
 @app.post("/blog")
 async def set_blog(blog:BlogRequest,current_user: Annotated[dict, Depends(get_current_user)]):
     try:
-        blog=await BlogService.create(user_id=current_user["id"],title=blog.title,content=blog.content,db=db.pool)
-        return CustomResponse(status=200,payload="Successfully created")
+        blog=await BlogService.create(user_id=current_user["id"],title=blog.title,content=blog.content,db=get_db())
+        return Response(status_code=200,content="Successfully created")
     except Exception as e:
-        return CustomResponse(status=400,payload=str(e))
+        return Response(status_code=400,content=str(e))
     
 @app.delete("/blog/{blog_id}")
 async def delete_blog(blog_id:int,current_user: Annotated[dict, Depends(get_current_user)]):
     try:
-        blog=await BlogService.read(blog_id=blog_id,db=db.pool)
+        blog=await BlogService.read(blog_id=blog_id,db=get_db())
         if blog["user_id"]!=current_user["id"]:
             raise ValueError("cant delete a blog you dont own")
-        blog=await BlogService.delete(blog_id,db=db.pool)
-        return CustomResponse(status=200,payload="Successfully deleted")
+        blog=await BlogService.delete(blog_id,db=get_db())
+        return Response(status_code=200,content="Successfully deleted")
     except Exception as e:
-        return CustomResponse(status=400,payload=str(e))
+        return Response(status_code=400,content=str(e))
     
 
 @app.get("/blog/comments/{blog_id}")
 async def comments(blog_id:int,current_user: Annotated[dict, Depends(get_current_user)]):
     try:
-        comments=await CommentService.read_all_from_blog(blog_id,db.pool)
+        comments=await CommentService.read_all_from_blog(blog_id,get_db())
         return Comments(comments=comments)
-    except Exception:
-        raise
+    except Exception as e:
+        return Response(status_code=400,content=f"Something went wrong error:{e}")
 
 @app.get("/user/comments")
 async def my_comments(current_user: Annotated[dict, Depends(get_current_user)]):
     try:
-        comments=await CommentService.read_all_from_user(current_user["id"],db.pool)
+        comments=await CommentService.read_all_from_user(current_user["id"],get_db())
         return Comments(comments=comments)
-    except Exception:
-        raise
+    except Exception as e:
+        return Response(status_code=400,content=f"Something went wrong error:{e}")
     
 @app.post("/comment")
 async def add_comment(comment:CommentRequest,current_user: Annotated[dict, Depends(get_current_user)]):
     try:
-        comment=await CommentService.create(blog_id=comment.blog_id,user_id=current_user["id"],content=comment.content,db=db.pool)
-        return CustomResponse(status=200,payload="Successfully created")
+        comment=await CommentService.create(blog_id=comment.blog_id,user_id=current_user["id"],content=comment.content,db=get_db())
+        return Response(status_code=200,content="Successfully created")
     except Exception as e:
-        return CustomResponse(status=400,payload=str(e))
+        return Response(status_code=400,content=str(e))
     
 @app.delete("/comment/{comment_id}")
 async def delete_comment(comment_id:int,current_user: Annotated[dict, Depends(get_current_user)]):
     try:
-        comment=await CommentService.read(comment_id=comment_id,db=db.pool)
+        comment=await CommentService.read(comment_id=comment_id,db=get_db())
         if comment["user_id"]!=current_user["id"]:
             raise ValueError("cant delete a blog you dont own")
-        await BlogService.delete(comment_id,db=db.pool)
-        return CustomResponse(status=200,payload="Successfully deleted")
+        await BlogService.delete(comment_id,db=get_db())
+        return Response(status_code=200,content="Successfully deleted")
     except Exception as e:
-        return CustomResponse(status=400,payload=str(e))
+        return Response(status_code=400,content=str(e))
  
 
  ```
 
- **hidden : /.git** 
-
- **hidden : /.gitignore** 
-
 --- 
- ## **path**: /schema.py 
+ ## **path**: blog_crud/schema.py 
  ```from pydantic import BaseModel
 from typing import List
 
@@ -454,12 +508,10 @@ class Token(BaseModel):
 
  ```
 
- **hidden : /context.md** 
-
- **hidden : /__pycache__** 
+ **hidden : blog_crud/__pycache__** 
 
 --- 
- ## **path**: /auth.py 
+ ## **path**: blog_crud/auth.py 
  ```from fastapi import Depends,  HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from datetime import datetime, timedelta, timezone
@@ -469,10 +521,10 @@ import jwt
 from jwt.exceptions import InvalidTokenError
 from typing import Annotated
 
-from pydantic_core.core_schema import int_schema
 
-from service import UserService
-from db import db
+
+from blog_crud.service import UserService
+from blog_crud.db import db
 import logging 
 
 logger=logging.getLogger(__name__)
@@ -518,4 +570,121 @@ async def get_current_user(token:Annotated[str,Depends(oauth2_scheme)]):
 
  ```
 
- **hidden : /.env** 
+ **hidden : __pycache__** 
+
+ **hidden : .env** 
+
+
+
+--- 
+ ## **path**: tests/__init__.py 
+ ``` 
+
+ ```
+
+--- 
+ ## **path**: tests/test_app.py 
+ ```import pytest
+from fastapi.testclient import TestClient
+from blog_crud.main import app
+from blog_crud.schema import BlogRequest, CommentRequest
+
+# -----------------------------------------------------------------------------
+# Fixtures
+# -----------------------------------------------------------------------------
+@pytest.fixture(scope="module")
+def client():
+    # lifespan context triggers DB connect/disconnect
+    with TestClient(app) as c:
+        yield c
+
+@pytest.fixture(scope="module")
+def signup_and_login(client):
+    """Create a user and return their access token."""
+    username = "tester"
+    password = "secret"
+
+    # sign up (ignore if already exists)
+    client.post("/signup", json={"name": username, "password": password})
+
+    # login to get JWT token
+    resp = client.post("/login", data={"username": username, "password": password})
+    assert resp.status_code == 200, resp.text
+    token = resp.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
+
+# -----------------------------------------------------------------------------
+# Tests: Users
+# -----------------------------------------------------------------------------
+def test_signup_new_user(client):
+    resp = client.post("/signup", json={"name": "unique_user", "password": "pw"})
+    assert resp.status_code in (200, 403)  # user may already exist
+
+def test_login_returns_token(client):
+    resp = client.post("/login", data={"username": "tester", "password": "secret"})
+    assert resp.status_code == 200
+    assert "access_token" in resp.json()
+
+# -----------------------------------------------------------------------------
+# Tests: Blogs
+# -----------------------------------------------------------------------------
+def test_create_blog(client, signup_and_login):
+    payload = BlogRequest(title="title one", content="content one").model_dump()
+    resp = client.post("/blog", headers=signup_and_login, json=payload)
+    assert resp.status_code == 200, resp.text
+
+def test_get_all_blogs(client, signup_and_login):
+    resp = client.get("/blogs", headers=signup_and_login)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "blogs" in data
+
+def test_get_blog_by_id(client, signup_and_login):
+    # create a blog first
+    new_blog = BlogRequest(title="temp", content="temp").model_dump()
+    create_resp = client.post("/blog", headers=signup_and_login, json=new_blog)
+    assert create_resp.status_code == 200
+    # read blogs to get an ID
+    list_resp = client.get("/blogs", headers=signup_and_login)
+    blog_id = list_resp.json()["blogs"][0]["id"]
+    resp = client.get(f"/blog/{blog_id}", headers=signup_and_login)
+    assert resp.status_code == 200
+
+def test_delete_blog(client, signup_and_login):
+    # make a new blog, then delete it
+    blog = BlogRequest(title="delete me", content="soon gone").model_dump()
+    create_resp = client.post("/blog", headers=signup_and_login, json=blog)
+    assert create_resp.status_code == 200
+    blogs_resp = client.get("/blogs", headers=signup_and_login)
+    blog_id = blogs_resp.json()["blogs"][-1]["id"]
+    resp = client.delete(f"/blog/{blog_id}", headers=signup_and_login)
+    assert resp.status_code == 200
+
+# -----------------------------------------------------------------------------
+# Tests: Comments
+# -----------------------------------------------------------------------------
+def test_add_comment_and_fetch(client, signup_and_login):
+    # create a blog to comment on
+    blog = BlogRequest(title="comment target", content="stuff").model_dump()
+    client.post("/blog", headers=signup_and_login, json=blog)
+    blogs_resp = client.get("/blogs", headers=signup_and_login)
+    blog_id = blogs_resp.json()["blogs"][-1]["id"]
+
+    # add comment
+    comment_payload = CommentRequest(blog_id=blog_id, content="nice!").model_dump()
+    resp = client.post("/comment", headers=signup_and_login, json=comment_payload)
+    assert resp.status_code == 200
+
+    # fetch comments for that blog
+    resp = client.get(f"/blog/comments/{blog_id}", headers=signup_and_login)
+    assert resp.status_code == 200
+    assert "comments" in resp.json()
+
+def test_user_comments_endpoint(client, signup_and_login):
+    resp = client.get("/user/comments", headers=signup_and_login)
+    assert resp.status_code == 200
+ 
+
+ ```
+
+ **hidden : tests/__pycache__** 

@@ -4,15 +4,15 @@ from contextlib import asynccontextmanager
 
 
 
-from db import db,get_db
-from service import (
+from blog_crud.db import db,get_db
+from blog_crud.service import (
     CreateTables,
     UserService,
     BlogService,
     CommentService
     )
-from schema import BlogRequest, CommentRequest, Comments, User,Token,Blogs,Blog
-from auth import create_access_token,get_current_user
+from blog_crud.schema import BlogRequest, CommentRequest, Comments, User,Token,Blogs,Blog
+from blog_crud.auth import create_access_token,get_current_user
 from typing import Annotated
 import logging 
 
@@ -56,7 +56,7 @@ async def login(form_data:Annotated[OAuth2PasswordRequestForm,Depends()])->Token
         )
     return Token(access_token=access_token,token_type="bearer")
     
-@app.get("/blogs")
+@app.get("/blogs",status_code=200)
 async def blogs(current_user: Annotated[User, Depends(get_current_user)]):
     try:
         blogs=await BlogService.read_all(get_db())
