@@ -1,20 +1,22 @@
-from asyncpg.pool import pool
+from asyncpg.pool import Pool
 from passlib.context import CryptContext
-from typing import Optional
+from typing import Optional, Union
 
-pwd_context=CryptContext(schemes=["bcrypt"],deprecated="auto")
+pwd_context=CryptContext(schemes=["argon2"],deprecated="auto")
+import logging 
 
+logger=logging.getLogger(__name__)
 
 class CreateTables:
     @staticmethod
-    async def run(db:pool):
+    async def run(db:Pool):
         await CreateTables.user_table(db)
         await CreateTables.blog_table(db)
         await CreateTables.comment_table(db)
 
         
     @staticmethod
-    async def user_table(db:pool):
+    async def user_table(db:Pool):
         await db.execute(''' 
                 CREATE TABLE IF NOT EXISTS users(
                     id SERIAL PRIMARY KEY,
@@ -22,9 +24,10 @@ class CreateTables:
                     password text
                 );            
                 ''')
+        logger.info("Created USERS table")
         
     @staticmethod
-    async def blog_table(db:pool):
+    async def blog_table(db:Pool):
         await db.execute(''' 
                 CREATE TABLE IF NOT EXISTS blogs(
                     id SERIAL PRIMARY KEY,
@@ -34,8 +37,9 @@ class CreateTables:
                     likes bigint DEFAULT 0
                 );         
                 ''')
+        logger.info("Created BLOGs table")
     @staticmethod
-    async def comment_table(db:pool):
+    async def comment_table(db:Pool):
         await db.execute(''' 
                 CREATE TABLE IF NOT EXISTS comments(
                     id SERIAL PRIMARY KEY,
@@ -44,6 +48,7 @@ class CreateTables:
                     user_id BIGINT REFERENCES users(id) ON DELETE CASCADE
                 );            
                 ''')
+        logger.info("Created COMMENTS table")
 
 class PasswordService:
     @staticmethod
@@ -57,17 +62,18 @@ class PasswordService:
 
 class UserService:
     @staticmethod
-    async def create(name:str,password:str,db:pool):
+    async def create(name:str,password:str,db:Pool):
         hashed=PasswordService.hash(password)
         row=await db.fetchrow(
             '''INSERT INTO users (name,password)
             Values($1,$2)
             RETURNING id;''',name,hashed
         )
+        logger.info(f"Created user with name={name}")
         return row["id"]
     
     @staticmethod
-    async def update(user_id:int,name:str,password:str,db:pool):
+    async def update(user_id:int,name:str,password:str,db:Pool):
         hashed=PasswordService.hash(password)
         result=await db.execute(
             '''UPDATE users 
@@ -75,18 +81,31 @@ class UserService:
             WHERE id=$3
         ;''',name,hashed,user_id
         )
-        return result == "UPDATE 1"
+        if result != "UPDATE 1":
+            logger.info(f"User(id={user_id})Failed to Update")
+            return False
+        
+        logger.info(f"User(id={user_id}) Updated successfully")
+        return True
+        
     
     @staticmethod
-    async def delete(user_id:int,db:pool):
+    async def delete(user_id:int,db:Pool):
         result=await db.execute('''
             DELETE FROM users
             WHERE id=$1;
             ''',user_id)
-        return result == "DELETE 1"
+        
+        if result != "DELETE 1":
+            logger.info(f"User(id={user_id})Failed to delete")
+            return False
+        
+        logger.info(f"User(id={user_id}) deleted successfully")
+        return True
+        
     
     @staticmethod
-    async def read(user_id:int,db:pool):
+    async def read(user_id:int,db:Pool):
         result=await db.fetchrow('''
             SELECT * FROM users
             WHERE id=$1;
@@ -94,15 +113,15 @@ class UserService:
         return dict(result) if result else False
     
     @staticmethod
-    async def exists(user_name:int,db:pool):
+    async def exists(user_name:str,db:Pool):
         result=await db.fetchrow('''
             SELECT * FROM users
-            WHERE id=$1;
+            WHERE name=$1;
             ''',user_name)
         return dict(result) if result else False
     
     @staticmethod
-    async def validate(user_name:str,password:str,db:pool)->Optional[dict]:
+    async def validate(user_name:str,password:str,db:Pool)->Union[dict,bool]:
 
         res=await db.fetchrow(''' 
                     SELECT * FROM users
@@ -118,16 +137,17 @@ class UserService:
 
 class BlogService:
     @staticmethod
-    async def create(title:str,content:str,user_id:int,db:pool):
+    async def create(title:str,content:str,user_id:int,db:Pool):
         row=await db.fetchrow(
             '''INSERT INTO blogs (title,content,user_id)
             Values($1,$2,$3)
             RETURNING id;''',title,content,user_id
         )
+        logger.info(f"Created blog with {title=}")
         return row["id"]
     
     @staticmethod
-    async def update(blog_id:int,title:str,content:str,db:pool):
+    async def update(blog_id:int,title:str,content:str,db:Pool):
         result=await db.execute(
             '''UPDATE blogs 
             SET title=$1 , content=$2
@@ -135,18 +155,29 @@ class BlogService:
             ''',
             title,content,blog_id
         )
-        return result=="UPDATE 1"
+        if result != "UPDATE 1":
+            logger.info(f"Blog(id={blog_id})Failed to Update")
+            return False
+        
+        logger.info(f"Blog(id={blog_id}) Updated successfully")
+        return True
+        
     
     @staticmethod
-    async def delete(blog_id:int,db:pool):
+    async def delete(blog_id:int,db:Pool):
         result=await db.execute('''
             DELETE FROM blogs
             WHERE id=$1;
             ''',blog_id)
-        return result == "DELETE 1"
+        if result != "DELETE 1":
+            logger.info(f"Blog(id={blog_id})Failed to Delete")
+            return False
+        
+        logger.info(f"Blog(id={blog_id}) Deleted successfully")
+        return True
     
     @staticmethod
-    async def read(blog_id:int,db:pool):
+    async def read(blog_id:int,db:Pool):
         result=await db.fetchrow('''
             SELECT * FROM blogs
             WHERE id=$1;
@@ -154,17 +185,26 @@ class BlogService:
         return dict(result) if result else False
     
     @staticmethod
-    async def read_all_for_user(user_id:int,db:pool):
+    async def read_all(db:Pool):
+        result=await db.fetch('''
+            SELECT * FROM blogs
+            ''')
+        parsed=[dict(i) for i in result]
+        return parsed
+    
+    @staticmethod
+    async def read_all_for_user(user_id:int,db:Pool):
         result=await db.fetch('''
             SELECT * FROM blogs
             WHERE user_id=$1;
             ''',user_id)
-        return result
+        parsed=[dict(i) for i in result]
+        return parsed
         
 
 class CommentService:
     @staticmethod
-    async def create(blog_id:int,content:str,user_id:int,db:pool):
+    async def create(blog_id:int,content:str,user_id:int,db:Pool):
         row=await db.fetchrow(
             '''INSERT INTO comments (blog_id,content,user_id)
             Values($1,$2,$3)
@@ -173,7 +213,7 @@ class CommentService:
         return row["id"]
     
     @staticmethod
-    async def update(comment_id:int,content:str,db:pool):
+    async def update(comment_id:int,content:str,db:Pool):
         result=await db.execute(
             '''UPDATE comments 
             SET content=$1
@@ -181,18 +221,28 @@ class CommentService:
             ''',
             content,comment_id
         )
-        return result=="UPDATE 1"
+        if result != "UPDATE 1":
+            logger.info(f"Comment(id={comment_id})Failed to Update")
+            return False
+        
+        logger.info(f"Comment(id={comment_id}) Updated successfully")
+        return True
     
     @staticmethod
-    async def delete(comment_id:int,db:pool):
+    async def delete(comment_id:int,db:Pool):
         result=await db.execute('''
             DELETE FROM comments
             WHERE id=$1;
             ''',comment_id)
-        return result == "DELETE 1"
-    
+        if result != "DELETE 1":
+            logger.info(f"Comment(id={comment_id})Failed to Delete")
+            return False
+        
+        logger.info(f"Comment(id={comment_id}) Deleted successfully")
+        return True
+        
     @staticmethod
-    async def read(comment_id:int,db:pool):
+    async def read(comment_id:int,db:Pool):
         result=await db.fetchrow('''
             SELECT * FROM comments
             WHERE id=$1;
@@ -201,17 +251,19 @@ class CommentService:
     
 
     @staticmethod
-    async def read_all_from_blog(blog_id:int,db:pool):
+    async def read_all_from_blog(blog_id:int,db:Pool):
         result=await db.fetch('''
             SELECT * FROM comments
             WHERE blog_id=$1;
             ''',blog_id)
-        return result
+        parsed=[dict(i) for i in result]
+        return parsed
     
     @staticmethod
-    async def read_all_from_user(user_id:int,db:pool):
+    async def read_all_from_user(user_id:int,db:Pool):
         result=await db.fetch('''
             SELECT * FROM comments
             WHERE user_id=$1;
             ''',user_id)
-        return result
+        parsed=[dict(i) for i in result]
+        return parsed

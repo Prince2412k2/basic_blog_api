@@ -1,4 +1,3 @@
-
 from fastapi import Depends,  HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from datetime import datetime, timedelta, timezone
@@ -8,16 +7,21 @@ import jwt
 from jwt.exceptions import InvalidTokenError
 from typing import Annotated
 
+from pydantic_core.core_schema import int_schema
+
 from service import UserService
 from db import db
+import logging 
 
+logger=logging.getLogger(__name__)
 load_dotenv()
 
 EXP_TIME=os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES")
 SECRET_KEY=os.environ.get("SECRET_KEY")
 ALGORITHM=os.environ.get("ALGORITHM")
+# print(SECRET_KEY, ALGORITHM)
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
 def create_access_token(user_id:int, expires_delta: timedelta=timedelta(minutes=15)):
     return(
@@ -32,17 +36,20 @@ def create_access_token(user_id:int, expires_delta: timedelta=timedelta(minutes=
 async def get_current_user(token:Annotated[str,Depends(oauth2_scheme)]):
     cred_exception=HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="COuld not Validate Credentials",
+        detail="Could not Validate Credentials",
         headers={"WWW-Authenticate":"Bearer"}
     )
-    try:
+    try: 
         payload=jwt.decode(token,SECRET_KEY,algorithms=[ALGORITHM])
         user_id=payload.get("sub")
         if user_id is None:
             raise cred_exception
     except InvalidTokenError:
         raise cred_exception
-    user=await UserService.read(user_id=user_id,db=db.pool)
+    user=await UserService.read(user_id=int(user_id),db=db.pool)
+
     if not user:
         raise cred_exception
+    
+    user["id"]=int(user_id)
     return user
