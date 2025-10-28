@@ -570,6 +570,50 @@ async def get_current_user(token:Annotated[str,Depends(oauth2_scheme)]):
 
  ```
 
+--- 
+ ## **path**: Dockerfile 
+ ```FROM python:3.12-slim AS builder
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+WORKDIR /app
+RUN apt-get update && apt-get install -y build-essential
+
+COPY requirements.txt .
+
+RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
+
+#--------------------------------------------------------------------#
+
+FROM python:3.12-slim AS runtime 
+
+RUN useradd -m appuser 
+WORKDIR /app
+
+COPY --from=builder /install /usr/local
+
+COPY blog_crud ./blog_crud
+
+EXPOSE 8000
+
+USER appuser 
+
+CMD ["uvicorn", "blog_crud.main:app", "--host", "0.0.0.0", "--port", "8000"]
+ 
+
+ ```
+
+--- 
+ ## **path**: requirements.txt 
+ ```fastapi[standard]
+pyjwt
+passlib
+asyncpg
+ 
+
+ ```
+
  **hidden : __pycache__** 
 
  **hidden : .env** 
@@ -621,10 +665,10 @@ def test_signup_new_user(client):
     assert resp.status_code in (200, 403)  # user may already exist
 
 def test_login_returns_token(client):
+    client.post("/signup", json={"name": "tester", "password": "secret"})
     resp = client.post("/login", data={"username": "tester", "password": "secret"})
-    assert resp.status_code == 200
+    assert resp.status_code == 200, resp.text
     assert "access_token" in resp.json()
-
 # -----------------------------------------------------------------------------
 # Tests: Blogs
 # -----------------------------------------------------------------------------
@@ -688,3 +732,5 @@ def test_user_comments_endpoint(client, signup_and_login):
  ```
 
  **hidden : tests/__pycache__** 
+
+ **hidden : .venv** 
